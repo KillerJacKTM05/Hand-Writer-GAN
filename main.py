@@ -69,7 +69,7 @@ def build_cgenerator(z_dim, num_classes):
     g = layers.LeakyReLU()(g)
     g = layers.Dense(512)(g)
     g = layers.LeakyReLU()(g)
-    g = layers.Dense(np.prod(img_shape), activation='tanh')(g)
+    g = layers.Dense(np.prod(img_shape), activation='sigmoid')(g)
     img = layers.Reshape(img_shape)(g)
     
     return tf.keras.Model([noise, label], img)
@@ -119,6 +119,14 @@ class SystemMonitor(tf.keras.callbacks.Callback):
         print(f"RAM Usage: {ram_percent}%")
         print(f"Trained Image Count: {count}")
 
+# Function to plot generated image
+def plot_generated_image(image, label):
+    plt.figure()
+    plt.imshow(image, cmap='gray')
+    plt.title(f"Generated image with label: {label}")
+    plt.axis('off')
+    plt.show()
+    
 #Build and compile the Discriminator
 cdiscriminator = build_cdiscriminator(img_shape, num_classes)
 cdiscriminator.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
@@ -148,48 +156,75 @@ best_g_loss = float('inf')
 system_monitor = SystemMonitor()
 system_monitor.set_model(cgan)
 
-
-# Training loop
-for epoch in range(n_epochs):
-    system_monitor.on_epoch_begin(epoch)  # Call on_epoch_begin for SystemMonitor
-    counter = 0
-    #refresh the image counter
-    for _ in range(train_gen.__len__()):
-        # Get a batch of real images and their corresponding labels
-        real_images, labels = train_gen.next()
+try:
+    # Training loop
+    for epoch in range(n_epochs):
+        system_monitor.on_epoch_begin(epoch)  # Call on_epoch_begin for SystemMonitor
+        counter = 0
+        epoch_d_loss = []
+        epoch_g_loss = []
+        epoch_d_acc = []
+        epoch_g_acc = []
+        #refresh the image counter
+        for _ in range(train_gen.__len__()):
+            # Get a batch of real images and their corresponding labels
+            real_images, labels = train_gen.next()
         
-        # Generate a batch of fake images
-        noise = np.random.normal(0, 1, (batch_size, z_dim))
-        fake_images = cgenerator.predict([noise, labels])
+            # Generate a batch of fake images
+            noise = np.random.normal(0, 1, (batch_size, z_dim))
+            fake_images = cgenerator.predict([noise, labels])
         
-        # Labels for real and fake images
-        real_y = np.ones((batch_size, 1))
-        fake_y = np.zeros((batch_size, 1))
+            # Labels for real and fake images
+            real_y = np.ones((batch_size, 1))
+            fake_y = np.zeros((batch_size, 1))
         
-        # Train the Discriminator
-        d_loss_real = cdiscriminator.train_on_batch([real_images, labels], real_y)
-        d_loss_fake = cdiscriminator.train_on_batch([fake_images, labels], fake_y)
-        d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+            # Train the Discriminator
+            d_loss_real = cdiscriminator.train_on_batch([real_images, labels], real_y)
+            d_loss_fake = cdiscriminator.train_on_batch([fake_images, labels], fake_y)
+            d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
         
-        # Train the Generator
-        noise = np.random.normal(0, 1, (batch_size, z_dim))
-        g_loss = cgan.train_on_batch([noise, labels], real_y)
+            # Train the Generator
+            noise = np.random.normal(0, 1, (batch_size, z_dim))
+            g_loss = cgan.train_on_batch([noise, labels], real_y)
         
-        # Update lists for plotting
-        d_losses.append(d_loss[0])
-        g_losses.append(g_loss)
-        d_accs.append(d_loss[1])
-        g_accs.append(d_loss[1])  #Generator accuracy is same as discriminator for fake images
-        # Check if the generator loss has improved
-        if g_loss < best_g_loss:
-            best_g_loss = g_loss
-            save_model(cgenerator, 'best_generator_model.h5', overwrite=True)  # Save the best model
+            # Update lists for plotting
+            epoch_d_loss.append(d_loss[0])
+            epoch_g_loss.append(g_loss)
+            epoch_d_acc.append(d_loss[1])
+            epoch_g_acc.append(d_loss[1])  #Generator accuracy is same as discriminator for fake images
+            # Check if the generator loss has improved
+            if g_loss < best_g_loss:
+                best_g_loss = g_loss
+                save_model(cgenerator, 'best_generator_model.h5', overwrite=True)  # Save the best model
         
-        # System Monitoring
-        counter += 1    
-        system_monitor.on_epoch_end(epoch, counter)
+            # System Monitoring
+            counter += 1    
+            system_monitor.on_epoch_end(epoch, counter)
         
-
+        # Calculate average loss and accuracy for the epoch
+        avg_d_loss = np.mean(epoch_d_loss)
+        avg_g_loss = np.mean(epoch_g_loss)
+        avg_d_acc = np.mean(epoch_d_acc)
+        avg_g_acc = np.mean(epoch_g_acc)
+        # Append to lists for plotting
+        d_losses.append(avg_d_loss)
+        g_losses.append(avg_g_loss)
+        d_accs.append(avg_d_acc)
+        g_accs.append(avg_g_acc)
+        # Plot a sample image from the generator
+        sample_noise = np.random.normal(0, 1, (1, z_dim))
+        random_label_index = np.random.randint(0, num_classes)
+        sample_label = np.zeros((1, num_classes))
+        sample_label[0, random_label_index] = 1  # One-hot encoding
+        generated_image = cgenerator.predict([sample_noise, sample_label])
+        plot_generated_image(generated_image[0, :, :, 0], str(random_label_index))
+        
+except KeyboardInterrupt:
+    print("Training interrupted. Saving models.")
+    cgenerator.save('generator_model_interrupted.h5')
+    cdiscriminator.save('discriminator_model_interrupted.h5')
+    cgan.save('gan_model_interrupted.h5')
+    
 # Plotting
 plt.figure(figsize=(12, 6))
 
